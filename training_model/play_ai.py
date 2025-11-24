@@ -11,7 +11,7 @@ from chess_cnn import ChessCNN
 base_dir = Path(__file__).resolve().parent
 model_path = base_dir / "model" / "chess_model_v4.pt"
 dict_path = base_dir / "model" / "move_to_idx.pkl"
-
+##
 # Load move_to_idx dictionary
 with open(dict_path, "rb") as f:
     move_to_idx = pickle.load(f)
@@ -59,6 +59,6 @@ for turn in range(10):  # play 10 moves
         print(f"\n🧩 Move {turn+1}: {predicted_move}")
         print(board)
     else:
-        print("⚠️ No legal move found. Stopping.")
+        print(" No legal move found. Stopping.")
         break
 
