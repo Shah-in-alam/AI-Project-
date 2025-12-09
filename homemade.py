@@ -215,7 +215,7 @@ def cnn_choose_move(board: chess.Board):
     return None
 
 # ============================================================
-# ⭐ HYBRID ENGINE CLASS (CNN first, fallback to legal move)
+#  HYBRID ENGINE CLASS (CNN first, fallback to legal move)
 # ============================================================
 
 class MyCNNAI(ExampleEngine):
