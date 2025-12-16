@@ -16,7 +16,7 @@ def get_move_index(move):
 
 class ChessDataset(Dataset):
     """Dataset for predicting next UCI move from board position."""
-    def __init__(self, df, max_games=5000, max_samples=50000):
+    def __init__(self, df, max_games=80000, max_samples=80000):
         self.samples = []
         for i, row in enumerate(df.itertuples()):
             board = chess.Board()

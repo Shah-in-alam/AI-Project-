@@ -95,157 +95,294 @@
 #             move = possible_moves[0]
 #         return PlayResult(move, None, draw_offered=draw_offered)
 
+
+
+
+
+# """
+# Homemade engines for lichess-bot + your CNN engine.
+# """
+# import logging
+# import random
+# import chess
+# from chess.engine import PlayResult, Limit
+
+# # Required lichess-bot imports
+# from lib.engine_wrapper import MinimalEngine
+# from lib.lichess_types import HOMEMADE_ARGS_TYPE, MOVE
+
+# logger = logging.getLogger(__name__)
+
+# # ============================================================
+# # ❗ DO NOT REMOVE — lichess-bot requires these classes
+# # ============================================================
+
+# class ExampleEngine(MinimalEngine):
+#     """Base class for all custom engines used by lichess-bot."""
+#     pass
+
+
+# class RandomMove(ExampleEngine):
+#     def search(self, board: chess.Board, *args: HOMEMADE_ARGS_TYPE):
+#         return PlayResult(random.choice(list(board.legal_moves)), None)
+
+
+# class Alphabetical(ExampleEngine):
+#     def search(self, board: chess.Board, *args: HOMEMADE_ARGS_TYPE):
+#         moves = list(board.legal_moves)
+#         moves.sort(key=board.san)
+#         return PlayResult(moves[0], None)
+
+
+# class FirstMove(ExampleEngine):
+#     def search(self, board: chess.Board, *args: HOMEMADE_ARGS_TYPE):
+#         moves = list(board.legal_moves)
+#         moves.sort(key=str)
+#         return PlayResult(moves[0], None)
+
+
+# class ComboEngine(ExampleEngine):
+#     def search(self,
+#                board: chess.Board,
+#                time_limit: Limit,
+#                ponder: bool,
+#                draw_offered: bool,
+#                root_moves: MOVE):
+
+#         possible_moves = root_moves if isinstance(root_moves, list) else list(board.legal_moves)
+#         possible_moves.sort(key=str)
+#         return PlayResult(possible_moves[0], None)
+
+# # ============================================================
+# # ⭐ YOUR CNN MODEL INTEGRATION
+# # ============================================================
+
+# import torch
+# import pickle
+# from pathlib import Path
+
+# ROOT_DIR = Path(__file__).resolve().parent
+# MODEL_DIR = ROOT_DIR / "training_model" / "model"
+
+# #MODEL_PATH = MODEL_DIR / "chess_model_v4.pt"
+# MODEL_PATH = MODEL_DIR / "rf_model.pkl"
+# MOVE_DICT_PATH = MODEL_DIR / "move_to_idx.pkl"
+
+# # Load move dictionary
+# with open(MOVE_DICT_PATH, "rb") as f:
+#     move_to_idx = pickle.load(f)
+# idx_to_move = {v: k for k, v in move_to_idx.items()}
+
+# # Import your model
+# from training_model.chess_cnn import ChessCNN
+
+# device = torch.device("cpu")
+# model = ChessCNN(num_outputs=len(move_to_idx))
+# model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+# model.eval()
+
+# logger.info(f" CNN model loaded with {len(move_to_idx)} moves")
+
+# def cnn_choose_move(board: chess.Board):
+#     tensor = torch.zeros((1, 13, 8, 8))
+
+#     piece_map = {
+#         'P':0,'N':1,'B':2,'R':3,'Q':4,'K':5,
+#         'p':6,'n':7,'b':8,'r':9,'q':10,'k':11
+#     }
+
+#     for sq, pc in board.piece_map().items():
+#         x, y = divmod(sq, 8)
+#         tensor[0, piece_map[pc.symbol()], x, y] = 1.0
+
+#     # side to move
+#     tensor[0, 12, :, :] = 1.0 if board.turn == chess.WHITE else 0.0
+
+#     with torch.no_grad():
+#         probs = torch.softmax(model(tensor), dim=1)[0]
+
+#     legal_moves = list(board.legal_moves)
+#     legal_uci = {m.uci(): m for m in legal_moves}
+
+#     # Top-K sampling to avoid repetition
+#     TOP_K = 5
+#     sorted_idx = torch.argsort(probs, descending=True)[:TOP_K].tolist()
+#     random.shuffle(sorted_idx)
+
+#     for idx in sorted_idx:
+#         mv_str = idx_to_move.get(idx)
+#         if mv_str in legal_uci:
+#             return legal_uci[mv_str]
+
+#     return None
+
+
+# # ============================================================
+# #  HYBRID ENGINE CLASS (CNN first, fallback to legal move)
+# # ============================================================
+
+# class MyCNNAI(ExampleEngine):
+#     """Your final engine: CNN first, fallback to legal move."""
+
+#     def search(self,
+#                board: chess.Board,
+#                time_limit: Limit,
+#                ponder: bool,
+#                draw_offered: bool,
+#                root_moves: MOVE):
+
+#         # root_moves support from lichess-bot
+#         if isinstance(root_moves, list):
+#             limited_legal = root_moves
+#         else:
+#             limited_legal = list(board.legal_moves)
+
+#         # Try CNN
+#         try:
+#             mv = cnn_choose_move(board)
+#         except Exception as e:
+#             logger.error(f"CNN error: {e}")
+#             mv = None
+
+#         # If CNN move not valid or None, fallback
+#         if mv not in limited_legal:
+#             if mv:
+#                 logger.info(f"CNN suggested illegal move: {mv}")
+#             mv = limited_legal[0]
+
+#         logger.info(f" CNN Engine move: {mv}")
+#         return PlayResult(mv, None)
+
 """
-Homemade engines for lichess-bot + your CNN engine.
+Homemade Random Forest chess bot for lichess-bot
 """
 import logging
-import random
+import warnings
 import chess
+import random
+import joblib
+import numpy as np
+from pathlib import Path
 from chess.engine import PlayResult, Limit
 
-# Required lichess-bot imports
 from lib.engine_wrapper import MinimalEngine
 from lib.lichess_types import HOMEMADE_ARGS_TYPE, MOVE
 
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# ❗ DO NOT REMOVE — lichess-bot requires these classes
+# REQUIRED BASE CLASS
 # ============================================================
 
 class ExampleEngine(MinimalEngine):
-    """Base class for all custom engines used by lichess-bot."""
     pass
 
 
-class RandomMove(ExampleEngine):
-    def search(self, board: chess.Board, *args: HOMEMADE_ARGS_TYPE):
-        return PlayResult(random.choice(list(board.legal_moves)), None)
-
-
-class Alphabetical(ExampleEngine):
-    def search(self, board: chess.Board, *args: HOMEMADE_ARGS_TYPE):
-        moves = list(board.legal_moves)
-        moves.sort(key=board.san)
-        return PlayResult(moves[0], None)
-
-
-class FirstMove(ExampleEngine):
-    def search(self, board: chess.Board, *args: HOMEMADE_ARGS_TYPE):
-        moves = list(board.legal_moves)
-        moves.sort(key=str)
-        return PlayResult(moves[0], None)
-
-
-class ComboEngine(ExampleEngine):
-    def search(self,
-               board: chess.Board,
-               time_limit: Limit,
-               ponder: bool,
-               draw_offered: bool,
-               root_moves: MOVE):
-
-        possible_moves = root_moves if isinstance(root_moves, list) else list(board.legal_moves)
-        possible_moves.sort(key=str)
-        return PlayResult(possible_moves[0], None)
-
 # ============================================================
-# ⭐ YOUR CNN MODEL INTEGRATION
+# LOAD RANDOM FOREST MODEL
 # ============================================================
-
-import torch
-import pickle
-from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent
 MODEL_DIR = ROOT_DIR / "training_model" / "model"
 
-MODEL_PATH = MODEL_DIR / "chess_model_v4.pt"
-MOVE_DICT_PATH = MODEL_DIR / "move_to_idx.pkl"
+RF_MODEL_PATH = MODEL_DIR / "rf_model_v1.pkl"
+MOVE_DICT_PATH = MODEL_DIR / "move_to_idx_v1.pkl"
 
-# Load move dictionary
-with open(MOVE_DICT_PATH, "rb") as f:
-    move_to_idx = pickle.load(f)
+rf_model = joblib.load(RF_MODEL_PATH)
+move_to_idx = joblib.load(MOVE_DICT_PATH)
 idx_to_move = {v: k for k, v in move_to_idx.items()}
 
-# Import your model
-from training_model.chess_cnn import ChessCNN
+logger.info("Random Forest model loaded")
+logger.info(f"Model predicts {len(idx_to_move)} possible moves")
 
-device = torch.device("cpu")
-model = ChessCNN(num_outputs=len(move_to_idx))
-model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-model.eval()
 
-logger.info(f"✅ CNN model loaded with {len(move_to_idx)} moves")
+warnings.filterwarnings(
+    "ignore",
+    message="Loky-backed parallel loops cannot be called"
+)
+rf_model.n_jobs = 1  # avoid issues with loky in lichess-bot
+# ============================================================
+# BOARD → FEATURE VECTOR
+# (must match how you trained RF!)
+# ============================================================
 
-def cnn_choose_move(board: chess.Board):
-    """Return the best move predicted by your CNN model."""
-    tensor = torch.zeros((1, 12, 8, 8))
+def board_to_features(board: chess.Board):
+    features = np.zeros(14, dtype=np.float32)
 
-    piece_map = {'P':0,'N':1,'B':2,'R':3,'Q':4,'K':5,
-                 'p':6,'n':7,'b':8,'r':9,'q':10,'k':11}
+    piece_values = {
+        chess.PAWN: 0,
+        chess.KNIGHT: 1,
+        chess.BISHOP: 2,
+        chess.ROOK: 3,
+        chess.QUEEN: 4,
+    }
 
-    # Encode board
-    for sq, pc in board.piece_map().items():
-        x, y = divmod(sq, 8)
-        tensor[0, piece_map[pc.symbol()], x, y] = 1
+    # White pieces
+    for piece, idx in piece_values.items():
+        features[idx] = len(board.pieces(piece, chess.WHITE))
 
-    # Predict
-    with torch.no_grad():
-        out = model(tensor)
-        probs = torch.softmax(out, dim=1)[0]
+    # Black pieces
+    for piece, idx in piece_values.items():
+        features[idx + 5] = len(board.pieces(piece, chess.BLACK))
 
-    sorted_idx = torch.argsort(probs, descending=True)
+    # Side to move
+    features[10] = 1 if board.turn == chess.WHITE else 0
+
+    # Castling rights
+    features[11] = board.has_kingside_castling_rights(chess.WHITE)
+    features[12] = board.has_kingside_castling_rights(chess.BLACK)
+
+    # Game phase (simple)
+    features[13] = board.fullmove_number
+
+    return features.reshape(1, -1)
+
+
+
+# ============================================================
+# RANDOM FOREST MOVE SELECTION
+# ============================================================
+
+def rf_choose_move(board: chess.Board):
+    features = board_to_features(board)
+
+    probs = rf_model.predict_proba(features)[0]
+    sorted_indices = np.argsort(probs)[::-1]
+
     legal_moves = list(board.legal_moves)
 
-    # Try to match CNN prediction with legal moves
-    for idx in sorted_idx:
-        mv_str = idx_to_move.get(idx.item())
-        if mv_str is None:
-            continue
-
-        for mv in legal_moves:
-            try:
-                if mv.uci() == mv_str or board.san(mv) == mv_str:
+    for idx in sorted_indices:
+        move_str = idx_to_move.get(idx)
+        if move_str:
+            for mv in legal_moves:
+                if mv.uci() == move_str:
                     return mv
-            except:
-                pass
 
-    # CNN failed — return None
-    return None
+    # fallback (never illegal)
+    return random.choice(legal_moves)
+
 
 # ============================================================
-#  HYBRID ENGINE CLASS (CNN first, fallback to legal move)
+# FINAL ENGINE CLASS USED BY lichess-bot
 # ============================================================
 
-class MyCNNAI(ExampleEngine):
-    """Your final engine: CNN first, fallback to legal move."""
+class MyRandomForestBot(ExampleEngine):
 
-    def search(self,
-               board: chess.Board,
-               time_limit: Limit,
-               ponder: bool,
-               draw_offered: bool,
-               root_moves: MOVE):
+    def search(
+        self,
+        board: chess.Board,
+        time_limit: Limit,
+        ponder: bool,
+        draw_offered: bool,
+        root_moves: MOVE
+    ) -> PlayResult:
 
-        # root_moves support from lichess-bot
-        if isinstance(root_moves, list):
-            limited_legal = root_moves
-        else:
-            limited_legal = list(board.legal_moves)
+        legal_moves = root_moves if isinstance(root_moves, list) else list(board.legal_moves)
 
-        # Try CNN
-        try:
-            mv = cnn_choose_move(board)
-        except Exception as e:
-            logger.error(f"CNN error: {e}")
-            mv = None
+        move = rf_choose_move(board)
 
-        # If CNN move not valid or None, fallback
-        if mv not in limited_legal:
-            if mv:
-                logger.info(f"CNN suggested illegal move: {mv}")
-            mv = limited_legal[0]
+        if move not in legal_moves:
+            move = random.choice(legal_moves)
 
-        logger.info(f"🤖 CNN Engine move: {mv}")
-        return PlayResult(mv, None)
+        logger.info(f"RF move: {move}")
+        return PlayResult(move, None)
